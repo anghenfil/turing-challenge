@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-iced = "0.13"
+eframe = { version = "0.30.0", features = ["default"] }
+egui_extras = { version = "0.30.0", features = ["default", "image"] }
 tokio = { version = "1", features = ["full", "rt"] }
 tokio-rustls = "0.26.1"
 rustls-pemfile = "2.2.0"
 uuid = { version = "1.11.0", features = ["v4"] }
 config = "0.15.0"
 serde = { version = "1.0.215", features = ["derive"] }
+tokio-stream = "0.1"
+bincode = "2.0.0-rc.3"

@@ -1,126 +1,231 @@
 use std::sync::Arc;
-use iced::{color, Border, Color, Element, Theme};
-use iced::border::Radius;
-use tokio_rustls::rustls::server::WebPkiClientVerifier;
-use tokio_rustls::rustls::ServerConfig;
-use tokio_rustls::TlsAcceptor;
-use crate::certs::{load_client_cert, load_private_key, load_root_ca};
+use std::time::SystemTime;
+use bincode::{Decode, Encode};
+use eframe::egui::{Context, FontData, FontDefinitions, FontFamily, FontId, TextStyle, Ui};
+use eframe::{egui, Frame};
+use tokio::sync::mpsc;
 
-pub mod ConnectScreen;
 pub mod certs;
 pub mod settings;
+pub mod network;
+pub mod connect_screen;
+pub mod start_screen;
+pub mod prompting_screen;
+
 #[derive(Debug, Clone, Default)]
 pub enum Screen {
     #[default]
     Connect,
     Start,
+    Prompting,
     Game,
     End,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ApplicationState {
     pub screen: Screen,
     pub connect_host: String,
     pub name: String,
-    pub custom_prompt: Option<String>,
+    pub custom_prompt: String,
+    pub warning: Option<String>,
+    pub marked_as_ready: bool,
+    pub marked_as_ready_opponent: bool,
+    pub marked_as_prompt_ready: bool,
+    pub marked_as_prompt_ready_opponent: bool,
+    pub prompting_start_time: Option<SystemTime>,
+    pub settings: settings::Settings,
+    pub mpsc_sender: mpsc::Sender<InterTaskMessageToNetworkTask>,
+    pub mpsc_receiver: mpsc::Receiver<InterTaskMessageToGUI>
 }
 
-#[derive(Debug, Clone)]
-enum Message{
-    IpSet(String),
-    ConnectButtonPressed,
-    NameChanged(String),
-    CustomPromptChanged(String),
-    ChangeScreen(Screen),
-}
+impl ApplicationState{
+    pub fn new(cc: &eframe::CreationContext<'_>, mpsc_sender: mpsc::Sender<InterTaskMessageToNetworkTask>, mpsc_receiver: mpsc::Receiver<InterTaskMessageToGUI>) -> Self {
+        let settings = settings::Settings::new().expect("Failed to load settings");
 
-impl ApplicationState {
-    fn update(&mut self, message: Message){
-        match message{
-            Message::IpSet(ip) => {
-                self.connect_host = ip;
-            }
-            Message::NameChanged(name) => {
-                self.name = name;
-            }
-            Message::CustomPromptChanged(custom_prompt) => {
-                self.custom_prompt = Some(custom_prompt);
-            },
-            Message::ChangeScreen(screen) => {
-                self.screen = screen;
-            }
-            Message::ConnectButtonPressed => {
-                //TODO
-            }
+        let mut fonts = FontDefinitions::default();
+        fonts.font_data.insert("pilowlava".to_string(), Arc::new(FontData::from_static(include_bytes!("../fonts/Pilowlava-Regular.otf"))));
+        fonts.font_data.insert("spacegrotesk".to_string(), Arc::new(FontData::from_static(include_bytes!("../fonts/SpaceGrotesk-Regular.otf"))));
+
+        fonts.families.get_mut(&FontFamily::Proportional).unwrap()
+            .insert(0, "spacegrotesk".to_owned());
+        fonts.families.insert(FontFamily::Name("Heading".into()), vec!["pilowlava".to_string()]);
+
+        cc.egui_ctx.set_fonts(fonts);
+
+        let mut style = (*cc.egui_ctx.style()).clone();
+        style.visuals.override_text_color = Some(egui::Color32::from_hex("#FF5053").unwrap());
+        style.visuals.window_fill = egui::Color32::from_hex("#0F000A").unwrap();
+        style.visuals.panel_fill = egui::Color32::from_hex("#0F000A").unwrap();
+        style.visuals.extreme_bg_color = egui::Color32::from_hex("#29114C").unwrap();
+        style.text_styles.insert(TextStyle::Heading, FontId::new(20.0, FontFamily::Name("Heading".into())));
+        cc.egui_ctx.set_style(style);
+
+        ApplicationState {
+            screen: Screen::Connect,
+            connect_host: "".to_string(),
+            name: "".to_string(),
+            custom_prompt: "".to_string(),
+            warning: None,
+            marked_as_ready: false,
+            marked_as_ready_opponent: false,
+            marked_as_prompt_ready: false,
+            marked_as_prompt_ready_opponent: false,
+            prompting_start_time: None,
+            settings,
+            mpsc_sender,
+            mpsc_receiver,
         }
     }
+}
 
-    fn view(&self) -> Element<Message> {
+impl eframe::App for ApplicationState{
+    fn update(&mut self, ctx: &Context, frame: &mut Frame) {
+        if !self.mpsc_receiver.is_empty(){
+            match self.mpsc_receiver.try_recv(){
+                Ok(msg) => {
+                    println!("Received message: {:?}", msg);
+                    match msg {
+                        InterTaskMessageToGUI::Connected { with } => {
+                            self.screen = Screen::Start;
+                        },
+                        InterTaskMessageToGUI::ConnectionFailed { error } => {
+                            self.warning = Some(error);
+                        },
+                        InterTaskMessageToGUI::ConnectionClosed => {
+                            self.screen = Screen::Connect;
+                            self.custom_prompt = "".to_string();
+                        },
+                        InterTaskMessageToGUI::MessageReceived { msg } => {
+                            match msg {
+                                TcpMessage::MarkedAsReady => {
+                                    self.marked_as_ready_opponent = true;
+                                },
+                                TcpMessage::PromptingFinished => {
+                                    self.marked_as_prompt_ready_opponent = true;
+                                },
+                                TcpMessage::EndGame => {
+                                    self.screen = Screen::End;
+                                },
+                                TcpMessage::Message(player_message) => {
+                                    println!("Received message: {:?}", player_message); //TODO
+                                }
+                            }
+                        }
+                        InterTaskMessageToGUI::ListenForConnections => {}
+                        InterTaskMessageToGUI::MspcSender { .. } => {}
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Error receiving message: {}", e);
+                }
+            }
+        }
+
+        if let Screen::Start = self.screen{
+            if self.marked_as_ready && self.marked_as_ready_opponent{
+                self.screen = Screen::Prompting;
+                self.prompting_start_time = Some(SystemTime::now())
+            }
+        }
+        if let Screen::Prompting = self.screen{
+            if self.prompting_start_time.unwrap().elapsed().unwrap().as_secs() >= 90{
+                self.marked_as_prompt_ready = true;
+            }
+            if self.marked_as_prompt_ready && self.marked_as_prompt_ready_opponent{
+                self.screen = Screen::Game;
+            }
+        }
+
         match self.screen{
             Screen::Connect => {
-                ConnectScreen::view(self)
+                connect_screen::render_connect_screen(self, ctx, frame);
             }
-            _ => {
-                 unimplemented!("Screen not implemented")
+            Screen::Start => {
+                start_screen::render_start_screen(self, ctx, frame);
+            },
+            Screen::Prompting => {
+                prompting_screen::render_prompting_screen(self, ctx, frame);
             }
+            Screen::Game => {}
+            Screen::End => {}
         }
     }
 }
 
-struct c3Theme;
+#[derive(Debug, Clone, Default)]
+pub enum InterTaskMessageToGUI {
+    #[default]
+    ListenForConnections,
+    MspcSender{
+        sender: mpsc::Sender<InterTaskMessageToNetworkTask>,
+    },
+    Connected{
+        with: String,
+    },
+    MessageReceived{
+        msg: TcpMessage,
+    },
+    ConnectionFailed{
+        error: String,
+    },
+    ConnectionClosed
+}
 
-static COLOR_PRIMARY: Color = color!(0xFF5053);
-static COLOR_HIGHLIGHT: Color = color!(0xFEF2FF);
-static COLOR_BACKGROUND: Color = color!(0x0F000A);
+#[derive(Debug, Clone, Default)]
+pub enum InterTaskMessageToNetworkTask {
+    #[default]
+    StopListening,
+    ConnectTo{
+        host_string: String,
+    },
+    SendMsg{
+        msg: TcpMessage,
+    },
+    //TODO: add ConnectionClosed, keepalive, etc.
+}
 
-impl c3Theme{
-    fn theme(state: &ApplicationState) -> Theme{
-        let c3palette = iced::theme::Palette{
-            background: COLOR_BACKGROUND,
-            text: COLOR_PRIMARY,
-            primary: color!(0x6A5FDB),
-            success: color!(0xB2AAFF),
-            danger: color!(0xFEF2FF),
-        };
-        Theme::custom("38c3".to_string(), c3palette)
-    }
+#[derive(Clone, Debug, Encode, Decode)]
+pub struct PlayerMessage{
+    pub msg: String,
+    pub chat: u8,
+    pub timestamp: u64,
+}
 
-    fn style_button(theme: &Theme, status: iced::widget::button::Status) -> iced::widget::button::Style{
-        iced::widget::button::Style{
-
-            background: None,
-            text_color: COLOR_PRIMARY,
-            border: Border{
-                color: COLOR_PRIMARY,
-                width: 1.0,
-                radius: Radius::new(3),
-            },
-            shadow: Default::default(),
-        }
-
-    }
+#[derive(Clone, Debug, Encode, Decode)]
+pub enum TcpMessage{
+    MarkedAsReady,
+    PromptingFinished,
+    Message(PlayerMessage),
+    EndGame,
 }
 
 #[tokio::main]
-async fn main()  {
-    let settings : Arc<settings::Settings> = Arc::new(settings::Settings::new().expect("Couldn't read config(s)!"));
+pub async fn main()  {
+    let options = eframe::NativeOptions::default();
 
-    // Load mtls certs
-    let root_ca = Arc::new(load_root_ca("root.crt".to_string()));
-    let client_cert = load_client_cert("client.crt".to_string());
-    let client_key = load_private_key("client.key".to_string());
+    let (sender_to_gui, mut receiver_from_network) = mpsc::channel::<InterTaskMessageToGUI>(100);
 
-    // Server Config
-    let client_verifier = WebPkiClientVerifier::builder(root_ca.clone()).build().expect("Couldn't build Client Verifier. Check Certs & Key!");
+    // Start the network task
+    network::spawn_network_task(sender_to_gui.clone());
 
-    let server_config = ServerConfig::builder_with_protocol_versions(&[&tokio_rustls::rustls::version::TLS13])
-        .with_client_cert_verifier(client_verifier)
-        .with_single_cert(client_cert.clone(), client_key).expect("Couldn't build Server Config. Check Certs & Key!");
+    // Get the sender to the network task
+    let msg = receiver_from_network.recv().await.unwrap();
+    let sender_to_network ;
 
-    // Create Server to listen on incoming rendering requests
-    let acceptor = TlsAcceptor::from(Arc::new(server_config));
-    let listener = TcpListener::bind(format!("{}:{}", settings.bind_to_host, settings.port)).await.unwrap();
+    if let InterTaskMessageToGUI::MspcSender {
+        sender
+    } = msg {
+        sender_to_network = sender;
+    }else{
+        panic!("Expected MspcSender message from network task");
+    };
 
-    iced::application("Turing Challenge", ApplicationState::update, ApplicationState::view).theme(c3Theme::theme).run();
+    eframe::run_native(
+        "The Turing Challenge",
+        options,
+        Box::new(|cc| Ok(Box::new({
+            ApplicationState::new(cc, sender_to_network, receiver_from_network)
+        })),),
+    ).expect("Couldn't start GUI");
 }

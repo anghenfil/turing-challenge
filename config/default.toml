@@ -1,0 +1,5 @@
+bind_to_host = "[::]"
+port = "6969"
+root_ca = "certs/root.crt"
+client_cert = "certs/client.crt"
+client_key = "certs/client.key"
