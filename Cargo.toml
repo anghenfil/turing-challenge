@@ -14,3 +14,5 @@ config = "0.15.0"
 serde = { version = "1.0.215", features = ["derive"] }
 tokio-stream = "0.1"
 bincode = "2.0.0-rc.3"
+rand = "0.8.5"
+reqwest = { version = "0.12.9", features = ["json"] }

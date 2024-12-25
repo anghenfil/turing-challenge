@@ -15,6 +15,10 @@ pub struct Settings {
     pub client_cert: String,
     /// path to the client key
     pub client_key: String,
+    /// OpenAI API key
+    pub openai_api_key: String,
+    /// Initial prompt for the LLM
+    pub initial_prompt: String,
 }
 
 impl Settings{

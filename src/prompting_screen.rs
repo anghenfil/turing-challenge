@@ -34,7 +34,7 @@ pub fn render_prompting_screen(app: &mut ApplicationState, ctx: &Context, frame:
                         ui.label("Initial Prompt");
                         ScrollArea::vertical().max_height(400.0).show(ui, |ui|{
                             let mut text_edit = TextEdit::multiline(&mut app.custom_prompt);
-                            if app.marked_as_ready{
+                            if app.marked_as_prompt_ready{
                                 text_edit = text_edit.interactive(false);
                             }
                             ui.add_sized([ui.available_width(), 400.0], text_edit);

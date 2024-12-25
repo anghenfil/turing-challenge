@@ -24,7 +24,7 @@ pub fn render_start_screen(app: &mut ApplicationState, ctx: &Context, frame: &mu
                         ui.heading("Welcome to the Turing Challenge");
                         ui.add_space(10.0);
                         ui.allocate_ui_with_layout(Vec2::from([content_width, 20.0]), egui::Layout::left_to_right(egui::Align::Min), |ui|{
-                            let mut label = Label::new(RichText::new("You will see two Chats, one belongs to the other human, the other one to an LLM. You will have 2 minutes to find out which one is which!\nYou may change the initial prompt of the LLM your opponent will encounter."));
+                            let mut label = Label::new(RichText::new("You will see two Chats, one belongs to the other human, the other one to an LLM. You will have 3,5 minutes to find out which one is which!\nYou may change the initial prompt of the LLM your opponent will encounter (max 1,5 minutes)."));
                             label = label.wrap();
                             ui.add(label);
                         });

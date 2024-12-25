@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use rand::Rng;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, MutexGuard};
@@ -9,7 +10,7 @@ use tokio_rustls::{TlsConnector, TlsStream};
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::TlsAcceptor;
 use crate::certs::{load_client_cert, load_private_key, load_root_ca};
-use crate::{settings, InterTaskMessageToGUI, InterTaskMessageToNetworkTask, TcpMessage};
+use crate::{settings, InterTaskMessageToGUI, InterTaskMessageToNetworkTask, LLMMessage, LLMModel, LLMRequest, LLMResponse, LLMResponseBundle, PlayerMessage, TcpMessage};
 
 pub fn spawn_network_task(mpsc_sender: tokio::sync::mpsc::Sender<InterTaskMessageToGUI>){
     tokio::spawn(async move {
@@ -98,7 +99,9 @@ pub fn spawn_network_task(mpsc_sender: tokio::sync::mpsc::Sender<InterTaskMessag
                                         }
                                     }
                                 },
-                                InterTaskMessageToNetworkTask::SendMsg{ .. } => {}}
+                                _ => {
+                                    panic!("Unexpected message from GUI: {:?}", msg);
+                                }}
                             }
                             None => {}
                         }
@@ -111,13 +114,13 @@ pub fn spawn_network_task(mpsc_sender: tokio::sync::mpsc::Sender<InterTaskMessag
 
             // Create two tasks to handle incoming and outgoing messages
             let (mut reader, mut writer) = tokio::io::split(tls_stream);
-            handle_writer(writer, gui_receiver);
+            handle_writer(writer, gui_receiver, sender_to_gui.clone());
             handle_reader(reader, sender_to_gui.clone())
         }
     });
 }
 
-pub fn handle_writer(mut writer: WriteHalf<TlsStream<TcpStream>>, mut receiver_from_gui: Receiver<InterTaskMessageToNetworkTask>){
+pub fn handle_writer(mut writer: WriteHalf<TlsStream<TcpStream>>, mut receiver_from_gui: Receiver<InterTaskMessageToNetworkTask>, sender_to_gui: Arc<Sender<InterTaskMessageToGUI>>){
     tokio::spawn(async move{
         loop{
             let msg_from_gui = receiver_from_gui.recv().await;
@@ -125,6 +128,7 @@ pub fn handle_writer(mut writer: WriteHalf<TlsStream<TcpStream>>, mut receiver_f
                 Some(msg_from_gui) => {
                     match msg_from_gui{
                         InterTaskMessageToNetworkTask::SendMsg { msg } => {
+                            println!("Sending message: {:?}", msg);
                             let encoded_msg = match bincode::encode_to_vec(msg, bincode::config::standard()){
                                 Ok(msg) => msg,
                                 Err(e) => {
@@ -152,6 +156,30 @@ pub fn handle_writer(mut writer: WriteHalf<TlsStream<TcpStream>>, mut receiver_f
                             }
 
                         },
+                        InterTaskMessageToNetworkTask::ContactLLM {msg, history, client, settings} => {
+                            let resp = talk_to_llm(msg, history, client, settings).await;
+
+                            let sender = sender_to_gui.clone();
+                            tokio::spawn(async move{
+                                if let Some(msg) = &resp.new_message_from_llm {
+                                    // calculate random delay before sending responsedelay
+
+                                    let num_of_chars = msg.chars().count();
+
+                                    let chars_per_second: f32;
+                                    {
+                                        let mut rng = rand::thread_rng();
+                                        chars_per_second = rng.gen_range(2.0..3.5);
+                                    }
+
+                                    let delay = num_of_chars as f32 / chars_per_second;
+                                    let delay_in_ms = (delay * 100.0) as u64;
+                                    println!("Delaying response by {} ms aka {} chars per second", delay_in_ms, chars_per_second);
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_in_ms)).await;
+                                }
+                                sender.send(InterTaskMessageToGUI::HandleLLMResponse { response: resp }).await.expect("Channel to GUI was closed :(");
+                            });
+                        }
                         _ => {
                             eprintln!("Received unexpected message from GUI: {:?}", msg_from_gui);
                         }
@@ -203,11 +231,55 @@ pub fn handle_reader(mut reader: ReadHalf<TlsStream<TcpStream>>, sender_to_gui: 
     });
 }
 
-pub async fn send_to_network_task(sender: Arc<Option<Mutex<Sender<InterTaskMessageToNetworkTask>>>>, message: InterTaskMessageToNetworkTask){
-    if let Some(sender) = &*sender {
-        let mut sender = sender.lock().await;
-        sender.send(message).await.unwrap();
-    } else {
-        panic!("Sender not initialized!");
+pub async fn talk_to_llm(msg: PlayerMessage, mut history: Vec<LLMMessage>, client: reqwest::Client, settings: Arc<settings::Settings>) -> LLMResponseBundle{
+    history.push(LLMMessage{
+        role: "user".to_string(),
+        content: msg.msg,
+        refusal: None,
+    });
+
+    let request = LLMRequest{
+        model: LLMModel::GPT4o,
+        messages: history.clone(),
+    };
+
+    println!("Sending request to LLM: {:?}", request);
+    let res = client.post("https://api.openai.com/v1/chat/completions")
+        .header("Authorization", format!("Bearer {}", settings.openai_api_key))
+        .json(&request)
+        .send().await;
+
+    let mut new_msg = None;
+
+    match res{
+        Ok(res) => {
+                let res = res.json::<LLMResponse>().await;
+                match res {
+                    Ok(res) => {
+                        println!("Received response from LLM: {:?}", res);
+                        if let Some(res) = res.choices.first() {
+                            if res.finish_reason != String::from("stop") {
+                                eprintln!("LLM didn't finish conversation. This is unexpected!");
+                            }
+                            new_msg = Some(res.message.content.clone());
+                            history.push(res.message.clone())
+                        } else {
+                            eprintln!("LLM didn't return any choices. This is unexpected!");
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("Couldn't decode response from LLM: {}", e);
+                    }
+                }
+
+        },
+        Err(e) => {
+            eprintln!("Couldn't send request: {}", e);
+        }
+    }
+
+    LLMResponseBundle{
+        new_message_from_llm: new_msg,
+        history,
     }
 }
