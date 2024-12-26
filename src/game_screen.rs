@@ -1,5 +1,5 @@
 use std::time::SystemTime;
-use eframe::egui::{Align, Color32, Context, Key, KeyboardShortcut, Margin, Modifiers, Rect, RichText, ScrollArea, Separator, TextEdit};
+use eframe::egui::{Align, Color32, Context, Key, KeyboardShortcut, Margin, Modifiers, RichText, ScrollArea, Separator, TextEdit};
 use eframe::{egui, Frame};
 use egui_extras::{Size, StripBuilder};
 use crate::{ApplicationState, ChatMessage, ChatMessageOrigin, InterTaskMessageToNetworkTask, PlayerMessage, TcpMessage};
@@ -204,7 +204,7 @@ pub fn show_message_frame(ui: &mut egui::Ui, msg: &ChatMessage){
         msg_frame = msg_frame.inner_margin(Margin::same(5.0));
 
         msg_frame.show(ui, |ui|{
-            let mut label = egui::Label::new(RichText::new(msg.message.clone()).color(Color32::BLACK)).wrap();
+            let label = egui::Label::new(RichText::new(msg.message.clone()).color(Color32::BLACK)).wrap();
             ui.add(label);
         });
     }

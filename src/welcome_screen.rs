@@ -1,5 +1,5 @@
 use crate::egui::RichText;
-use eframe::egui::{Button, Color32, Context, Label, Pos2, Rect, ScrollArea, TextEdit, Vec2};
+use eframe::egui::{Context, Label, TextEdit, Vec2};
 use eframe::{egui, Frame};
 use egui_extras::{Size, StripBuilder};
 use crate::{ApplicationState, InterTaskMessageToNetworkTask, TcpMessage};

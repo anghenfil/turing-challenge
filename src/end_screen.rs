@@ -1,9 +1,9 @@
 use crate::egui::RichText;
 use std::time::SystemTime;
-use eframe::egui::{Color32, Context, Key, KeyboardShortcut, Margin, Modifiers, ScrollArea, Separator, TextEdit, TextStyle};
+use eframe::egui::{Color32, Context, Margin, ScrollArea, Separator};
 use eframe::{egui, Frame};
 use egui_extras::{Size, StripBuilder};
-use crate::{ApplicationState, ChatMessage, ChatMessageOrigin, InterTaskMessageToNetworkTask, PlayerMessage, TcpMessage};
+use crate::ApplicationState;
 
 pub fn render_end_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut Frame){
     egui::CentralPanel::default().show(ctx, |ui| {

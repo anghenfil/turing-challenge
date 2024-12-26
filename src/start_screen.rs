@@ -1,4 +1,4 @@
-use eframe::egui::{Context, Pos2, Rect, Vec2};
+use eframe::egui::Context;
 use eframe::{egui, Frame};
 use egui_extras::{Size, StripBuilder};
 use crate::{ApplicationState, InterTaskMessageToNetworkTask};

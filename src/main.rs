@@ -2,14 +2,13 @@ use std::fmt::Display;
 use std::sync::Arc;
 use std::time::SystemTime;
 use bincode::{Decode, Encode};
-use eframe::egui::{Context, FontData, FontDefinitions, FontFamily, FontId, TextStyle, Ui};
+use eframe::egui::{Context, FontData, FontDefinitions, FontFamily, FontId, TextStyle};
 use eframe::{egui, Frame};
-use eframe::emath::History;
 use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize, Serializer};
 use serde::ser::SerializeMap;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 use crate::settings::Settings;
 
 pub mod certs;
