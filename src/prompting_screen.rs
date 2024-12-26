@@ -1,4 +1,4 @@
-use eframe::egui::{Context, ScrollArea, TextEdit};
+use eframe::egui::{Context, RichText, ScrollArea, TextEdit};
 use eframe::{egui, Frame};
 use egui_extras::{Size, StripBuilder};
 use crate::{ApplicationState, InterTaskMessageToNetworkTask, TcpMessage};
@@ -48,7 +48,7 @@ pub fn render_prompting_screen(app: &mut ApplicationState, ctx: &Context, frame:
                         }else{
                             if ui.add(button).clicked(){
                                 app.marked_as_prompt_ready = true;
-                                if let Err(e) = app.mpsc_sender.try_send(InterTaskMessageToNetworkTask::SendMsg { msg: TcpMessage::PromptingFinished }){
+                                if let Err(e) = app.mpsc_sender.send(InterTaskMessageToNetworkTask::SendMsg { msg: TcpMessage::PromptingFinished }){
                                     eprintln!("Error sending message: {}", e);
                                     // TODO: Handle error / reset application / reconnect
                                 }
@@ -63,7 +63,13 @@ pub fn render_prompting_screen(app: &mut ApplicationState, ctx: &Context, frame:
                         let mut frame = egui::Frame::default();
                         frame = frame.fill(egui::Color32::from_hex("#29114C").unwrap());
                         frame.show(ui, |ui|{
-                            ui.add_sized([30.0, 25.0], egui::Label::new(format!("{}", time)));
+                            let mut time_left = RichText::new(format!("{}", time));
+
+                            if time < 15 && time % 2 == 0 {
+                                time_left = time_left.strong();
+                            }
+
+                            ui.add_sized([30.0, 25.0], egui::Label::new(time_left));
                         });
                         ui.add_space((available_width - 30.0)/2.0);
                     });

@@ -16,7 +16,7 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
     if !app.llm_chat_first_message && time_elapsed >= app.llm_take_iniative_after as u64 {
         app.llm_chat_first_message = true;
 
-        app.mpsc_sender.try_send(InterTaskMessageToNetworkTask::ContactLLM {
+        app.mpsc_sender.send(InterTaskMessageToNetworkTask::ContactLLM {
             msg: PlayerMessage {
                 msg: "Schreibe einen kurzen Konservationsstarter, lasse dir nicht anmerken, dass du eine KI bist. Reagiere nicht auf diese Nachricht. Schreibe nur etwas wie Hey! oder Hey, wie gehts dir? oder Hallo oder Moin oder ähnliches".to_string(),
                 from_ai: false,
@@ -106,7 +106,7 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
                                                 to_ai,
                                                 timestamp: SystemTime::now(),
                                             });
-                                            app.mpsc_sender.try_send(InterTaskMessageToNetworkTask::SendMsg { msg: tcp_msg }).expect("Channel to network task is closed :(");
+                                            app.mpsc_sender.send(InterTaskMessageToNetworkTask::SendMsg { msg: tcp_msg }).expect("Channel to network task is closed :(");
                                             app.chat1_input = "".to_string();
                                         }
                                     });
@@ -170,7 +170,7 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
                                                 from_ai: false,
                                                 to_ai,
                                             });
-                                            app.mpsc_sender.try_send(InterTaskMessageToNetworkTask::SendMsg { msg: tcp_msg }).expect("Channel to network task is closed :(");
+                                            app.mpsc_sender.send(InterTaskMessageToNetworkTask::SendMsg { msg: tcp_msg }).expect("Channel to network task is closed :(");
 
                                             app.chat2_input = "".to_string();
                                         }

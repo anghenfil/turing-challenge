@@ -1,8 +1,7 @@
-use crate::egui::RichText;
-use eframe::egui::{Button, Color32, Context, Label, Pos2, Rect, ScrollArea, TextEdit, Vec2};
+use eframe::egui::{Context, Pos2, Rect, Vec2};
 use eframe::{egui, Frame};
 use egui_extras::{Size, StripBuilder};
-use crate::{ApplicationState, InterTaskMessageToNetworkTask, TcpMessage};
+use crate::{ApplicationState, InterTaskMessageToNetworkTask};
 
 pub fn render_start_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut Frame){
     egui::CentralPanel::default().show(ctx, |ui| {
@@ -15,50 +14,35 @@ pub fn render_start_screen(app: &mut ApplicationState, ctx: &Context, frame: &mu
             .size(Size::exact(content_width))
             .size(Size::exact(side_width))
             .horizontal(|mut strip|{
-                strip.cell(|ui|{
+               strip.cell(|ui|{
 
-                });
-                strip.cell(|ui|{
-                    ui.vertical_centered(|ui|{
-                        ui.add_space(10.0);
-                        ui.heading("Welcome to the Turing Challenge");
-                        ui.add_space(10.0);
-                        ui.allocate_ui_with_layout(Vec2::from([content_width, 20.0]), egui::Layout::left_to_right(egui::Align::Min), |ui|{
-                            let mut label = Label::new(RichText::new("You will see two Chats, one belongs to the other human, the other one to an LLM. You will have 3,5 minutes to find out which one is which!\nYou may change the initial prompt of the LLM your opponent will encounter (max 1,5 minutes)."));
-                            label = label.wrap();
-                            ui.add(label);
-                        });
-                        ui.add_space(10.0);
-                        ui.horizontal(|ui|{
-                            ui.label("Username");
-                            let mut text_edit = TextEdit::singleline(&mut app.name);
+               });
+               strip.cell(|ui|{
+                   ui.vertical_centered(|ui|{
+                       ui.add_space(10.0);
+                       ui.heading("The Turing Challenge");
+                       ui.add_space(40.0);
 
-                            if app.marked_as_ready{
-                                text_edit = text_edit.interactive(false);
-                            }
+                       if let Some(warning) = &app.warning{
+                           ui.label(warning).highlight();
+                           ui.add_space(10.0);
+                       }
 
-                            ui.add_sized(ui.available_size(), text_edit);
-                        });
-                        ui.add_space(10.0);
-                        let button = egui::Button::new("Mark as Ready");
+                       if ui.button("Start Game").clicked(){
+                           app.start_game_pressed = true;
+                           app.mpsc_sender.send(InterTaskMessageToNetworkTask::ConnectTo {
+                               host_string: app.settings.connect_to_host.clone(),
+                           }).expect("Channel to network task is closed :(");
+                       }
 
-                        if app.marked_as_ready{
-                            ui.add_enabled(false, button);
-                            ui.spinner();
-                        }else{
-                            if ui.add(button).clicked(){
-                                app.marked_as_ready = true;
-                                if let Err(e) = app.mpsc_sender.try_send(InterTaskMessageToNetworkTask::SendMsg { msg: TcpMessage::MarkedAsReady }){
-                                    eprintln!("Error sending message: {}", e);
-                                    // TODO: Handle error / reset application / reconnect
-                                }
-                            }
-                        }
-                    });
-                });
-                strip.cell(|ui|{
+                       if app.start_game_pressed{
+                           ui.spinner();
+                       }
+                   });
+               });
+               strip.cell(|ui|{
 
-                });
+               });
             });
     });
 }

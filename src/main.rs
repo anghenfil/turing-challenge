@@ -9,14 +9,14 @@ use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize, Serializer};
 use serde::ser::SerializeMap;
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use crate::settings::Settings;
 
 pub mod certs;
 pub mod settings;
 pub mod network;
-pub mod connect_screen;
 pub mod start_screen;
+pub mod welcome_screen;
 pub mod prompting_screen;
 pub mod game_screen;
 pub mod end_screen;
@@ -24,8 +24,8 @@ pub mod end_screen;
 #[derive(Debug, Clone, Default)]
 pub enum Screen {
     #[default]
-    Connect,
     Start,
+    Welcome,
     Prompting,
     Game,
     End,
@@ -34,8 +34,8 @@ pub enum Screen {
 
 #[derive(Debug)]
 pub struct ApplicationState {
+    pub start_game_pressed: bool,
     pub screen: Screen,
-    pub connect_host: String,
     pub name: String,
     pub custom_prompt: String,
     pub warning: Option<String>,
@@ -58,8 +58,9 @@ pub struct ApplicationState {
     pub showing_end_screen_since: Option<SystemTime>,
     pub reqwest_client: Client,
     pub settings: Arc<settings::Settings>,
-    pub mpsc_sender: mpsc::Sender<InterTaskMessageToNetworkTask>,
-    pub mpsc_receiver: mpsc::Receiver<InterTaskMessageToGUI>
+    pub mpsc_sender: tokio::sync::broadcast::Sender<InterTaskMessageToNetworkTask>,
+    pub mpsc_receiver: tokio::sync::broadcast::Receiver<InterTaskMessageToGUI>,
+    pub mpsc_restart_sender: tokio::sync::broadcast::Sender<()>,
 }
 
 #[derive(Debug, Clone)]
@@ -161,7 +162,7 @@ enum ChatMessageOrigin{
 }
 
 impl ApplicationState{
-    pub fn new(cc: &eframe::CreationContext<'_>, mpsc_sender: mpsc::Sender<InterTaskMessageToNetworkTask>, mpsc_receiver: mpsc::Receiver<InterTaskMessageToGUI>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, mpsc_sender: broadcast::Sender<InterTaskMessageToNetworkTask>, mpsc_receiver: broadcast::Receiver<InterTaskMessageToGUI>, mpsc_restart_sender: broadcast::Sender<()>) -> Self {
         let settings = settings::Settings::new().expect("Failed to load settings");
 
         let mut fonts = FontDefinitions::default();
@@ -188,8 +189,8 @@ impl ApplicationState{
         let llm_take_iniative_after = rng.gen_range(0..=15);
 
         ApplicationState {
-            screen: Screen::Connect,
-            connect_host: "".to_string(),
+            start_game_pressed: false,
+            screen: Screen::Start,
             name: "".to_string(),
             custom_prompt: "".to_string(),
             warning: None,
@@ -213,6 +214,7 @@ impl ApplicationState{
             settings: Arc::new(settings),
             mpsc_sender,
             mpsc_receiver,
+            mpsc_restart_sender,
         }
     }
 }
@@ -225,14 +227,17 @@ impl eframe::App for ApplicationState{
                     println!("Received message: {:?}", msg);
                     match msg {
                         InterTaskMessageToGUI::Connected { with } => {
-                            self.screen = Screen::Start;
+                            self.screen = Screen::Welcome;
                         },
                         InterTaskMessageToGUI::ConnectionFailed { error } => {
                             self.warning = Some(error);
+                            self.start_game_pressed = false;
                         },
-                        InterTaskMessageToGUI::ConnectionClosed => {
-                            self.screen = Screen::Connect;
-                            self.custom_prompt = "".to_string();
+                        InterTaskMessageToGUI::ConnectionClosedUnexpectedly {error} => {
+                            println!("Connection closed unexpectedly: {}", error);
+                           // Reset the state
+                            reset_app_state(self);
+                            self.mpsc_restart_sender.send(()).unwrap();
                         },
                         InterTaskMessageToGUI::MessageReceived { msg } => {
                             match msg {
@@ -248,7 +253,7 @@ impl eframe::App for ApplicationState{
                                 TcpMessage::Message(player_message) => {
                                     if player_message.to_ai{
                                         self.llm_chat_first_message = true;
-                                        self.mpsc_sender.try_send(InterTaskMessageToNetworkTask::ContactLLM {
+                                        self.mpsc_sender.send(InterTaskMessageToNetworkTask::ContactLLM {
                                             msg: player_message,
                                             history: self.llm_history.clone(),
                                             client: self.reqwest_client.clone(),
@@ -295,7 +300,7 @@ impl eframe::App for ApplicationState{
 
                             if let Some(new_msg) = response.new_message_from_llm {
                                 // Send the message to the opponent
-                                self.mpsc_sender.try_send(InterTaskMessageToNetworkTask::SendMsg {
+                                self.mpsc_sender.send(InterTaskMessageToNetworkTask::SendMsg {
                                     msg: TcpMessage::Message(PlayerMessage {
                                         msg: new_msg.clone(),
                                         from_ai: true,
@@ -313,7 +318,7 @@ impl eframe::App for ApplicationState{
             }
         }
 
-        if let Screen::Start = self.screen{
+        if let Screen::Welcome = self.screen{
             if self.marked_as_ready && self.marked_as_ready_opponent{
                 self.screen = Screen::Prompting;
                 self.prompting_start_time = Some(SystemTime::now())
@@ -322,6 +327,9 @@ impl eframe::App for ApplicationState{
         if let Screen::Prompting = self.screen{
             if self.prompting_start_time.unwrap().elapsed().unwrap().as_secs() >= 90{
                 self.marked_as_prompt_ready = true;
+                self.mpsc_sender.send(InterTaskMessageToNetworkTask::SendMsg {
+                    msg: TcpMessage::PromptingFinished
+                }).unwrap();
             }
             if self.marked_as_prompt_ready && self.marked_as_prompt_ready_opponent{
                 // Create first messages for LLM
@@ -349,16 +357,19 @@ impl eframe::App for ApplicationState{
 
         if let Screen::End2 = self.screen{
             if self.showing_end_screen_since.unwrap().elapsed().unwrap().as_secs() >= 10{
-                self.screen = Screen::Connect;
+                // Restart the app
+                reset_app_state(self);
+                self.mpsc_restart_sender.send(()).unwrap();
+                self.screen = Screen::Start;
             }
         }
 
         match self.screen{
-            Screen::Connect => {
-                connect_screen::render_connect_screen(self, ctx, frame);
-            }
             Screen::Start => {
                 start_screen::render_start_screen(self, ctx, frame);
+            }
+            Screen::Welcome => {
+                welcome_screen::render_welcome_screen(self, ctx, frame);
             },
             Screen::Prompting => {
                 prompting_screen::render_prompting_screen(self, ctx, frame);
@@ -381,7 +392,7 @@ pub enum InterTaskMessageToGUI {
     #[default]
     ListenForConnections,
     MspcSender{
-        sender: mpsc::Sender<InterTaskMessageToNetworkTask>,
+        sender: broadcast::Sender<InterTaskMessageToNetworkTask>,
     },
     Connected{
         with: String,
@@ -392,7 +403,9 @@ pub enum InterTaskMessageToGUI {
     ConnectionFailed{
         error: String,
     },
-    ConnectionClosed,
+    ConnectionClosedUnexpectedly{
+        error: String,
+    },
     HandleLLMResponse{
         response: LLMResponseBundle,
     }
@@ -414,7 +427,6 @@ pub enum InterTaskMessageToNetworkTask {
         client: Client,
         settings: Arc<Settings>,
     },
-    //TODO: add ConnectionClosed, keepalive, etc.
 }
 
 #[derive(Clone, Debug, Encode, Decode)]
@@ -437,10 +449,12 @@ pub enum TcpMessage{
 pub async fn main()  {
     let options = eframe::NativeOptions::default();
 
-    let (sender_to_gui, mut receiver_from_network) = mpsc::channel::<InterTaskMessageToGUI>(100);
+    let (sender_to_gui, mut receiver_from_network) = broadcast::channel::<InterTaskMessageToGUI>(100);
+
+    let (restart_sender, restart_receiver) = tokio::sync::broadcast::channel::<()>(1);
 
     // Start the network task
-    network::spawn_network_task(sender_to_gui.clone());
+    network::spawn_network_task(sender_to_gui.clone(), restart_sender.subscribe(), restart_sender.subscribe(), restart_sender.subscribe());
 
     // Get the sender to the network task
     let msg = receiver_from_network.recv().await.unwrap();
@@ -458,7 +472,35 @@ pub async fn main()  {
         "The Turing Challenge",
         options,
         Box::new(|cc| Ok(Box::new({
-            ApplicationState::new(cc, sender_to_network, receiver_from_network)
+            ApplicationState::new(cc, sender_to_network, receiver_from_network, restart_sender.clone())
         })),),
     ).expect("Couldn't start GUI");
+}
+
+fn reset_app_state(state: &mut ApplicationState){
+    let mut rng = rand::thread_rng();
+    let human_chat : u8= rng.gen_range(0..=1);
+    let llm_take_iniative_after = rng.gen_range(0..=15);
+
+    state.start_game_pressed = false;
+    state.screen = Screen::Start;
+    state.name = "".to_string();
+    state.warning = None;
+    state.custom_prompt = "".to_string();
+    state.marked_as_ready = false;
+    state.marked_as_ready_opponent = false;
+    state.marked_as_prompt_ready = false;
+    state.marked_as_prompt_ready_opponent = false;
+    state.chat1_input = "".to_string();
+    state.chat2_input = "".to_string();
+    state.chat1_history = vec![];
+    state.chat2_history = vec![];
+    state.human_chat = human_chat;
+    state.prompting_start_time = None;
+    state.game_start_time = None;
+    state.llm_history = vec![];
+    state.llm_take_iniative_after = llm_take_iniative_after;
+    state.llm_chat_first_message = false;
+    state.correctly_guessed = None;
+    state.showing_end_screen_since = None;
 }

@@ -9,6 +9,8 @@ pub struct Settings {
     pub bind_to_host: String,
     /// port to listen on
     pub port: usize,
+    /// hoststring to connect to
+    pub connect_to_host: String,
     /// path to the root certificate
     pub root_ca: String,
     /// path to the client certificate
