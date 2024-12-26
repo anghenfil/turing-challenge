@@ -1,13 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 use rand::Rng;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{broadcast, Mutex, MutexGuard};
+use tokio::sync::broadcast;
 use tokio::sync::broadcast::Sender;
 use tokio::time::timeout;
 use tokio_rustls::rustls::server::WebPkiClientVerifier;
-use tokio_rustls::rustls::{ClientConfig, ClientConnection, Reader, ServerConfig};
+use tokio_rustls::rustls::{ClientConfig, ServerConfig};
 use tokio_rustls::{TlsConnector, TlsStream};
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::TlsAcceptor;
@@ -40,7 +40,7 @@ pub fn spawn_network_task(mpsc_sender: tokio::sync::broadcast::Sender<InterTaskM
         let sender_to_gui = Arc::new(mpsc_sender.clone());
 
         // Create second mpsc channel to receive messages from the GUI
-        let (gui_sender, mut gui_receiver) = tokio::sync::broadcast::channel::<InterTaskMessageToNetworkTask>(30);
+        let (gui_sender, gui_receiver) = tokio::sync::broadcast::channel::<InterTaskMessageToNetworkTask>(30);
 
         // Send the GUI sender to the GUI task
         sender_to_gui.send(InterTaskMessageToGUI::MspcSender { sender: gui_sender.clone() }).unwrap();
@@ -79,16 +79,20 @@ pub fn spawn_network_task(mpsc_sender: tokio::sync::broadcast::Sender<InterTaskM
                                         let connector = TlsConnector::from(client_config.clone());
                                         match timeout(Duration::from_secs(5), TcpStream::connect(host_string.clone())).await{
                                             Ok(Ok(stream)) => {
-                                                match connector.connect(ServerName::try_from("localhost").unwrap(), stream).await{
-                                                    Ok(tls_stream1) => {
+                                                match timeout(Duration::from_secs(5), connector.connect(ServerName::try_from("localhost").unwrap(), stream)).await{
+                                                    Ok(Ok(tls_stream1)) => {
                                                         println!("Connected!");
                                                         let tls_stream = Some(TlsStream::from(tls_stream1));
                                                         sender_to_gui.send(InterTaskMessageToGUI::Connected{ with: host_string.clone() }).unwrap();
                                                         break tls_stream;
                                                     },
-                                                    Err(e) => {
+                                                    Ok(Err(e)) => {
                                                         sender_to_gui.send(InterTaskMessageToGUI::ConnectionFailed{error: format!("Couldn't connect to {}: {}", host_string, e)}).unwrap();
                                                         eprintln!("Couldn't connect to {}: {}", host_string, e);
+                                                    },
+                                                    Err(_) => {
+                                                        sender_to_gui.send(InterTaskMessageToGUI::ConnectionFailed{error: format!("Couldn't connect to {}: Timeout", host_string)}).unwrap();
+                                                        eprintln!("Couldn't connect to {}: Timeout!", host_string);
                                                     }
                                                 }
                                             },
@@ -128,7 +132,7 @@ pub fn spawn_network_task(mpsc_sender: tokio::sync::broadcast::Sender<InterTaskM
                 println!("Handling incoming connection");
 
                 // Create two tasks to handle incoming and outgoing messages
-                let (mut reader, mut writer) = tokio::io::split(tls_stream);
+                let (reader, writer) = tokio::io::split(tls_stream);
                 handle_writer(writer, gui_receiver.resubscribe(), sender_to_gui.clone(), restart_receiver2.resubscribe());
                 handle_reader(reader, sender_to_gui.clone(), restart_receiver3.resubscribe());
             }
@@ -139,7 +143,7 @@ pub fn spawn_network_task(mpsc_sender: tokio::sync::broadcast::Sender<InterTaskM
     });
 }
 
-pub fn handle_writer(mut writer: WriteHalf<TlsStream<TcpStream>>, mut receiver_from_gui: broadcast::Receiver<InterTaskMessageToNetworkTask>, sender_to_gui: Arc<Sender<InterTaskMessageToGUI>>, mut restart_receiver: tokio::sync::broadcast::Receiver<()>) {
+pub fn handle_writer(writer: WriteHalf<TlsStream<TcpStream>>, receiver_from_gui: broadcast::Receiver<InterTaskMessageToNetworkTask>, sender_to_gui: Arc<Sender<InterTaskMessageToGUI>>, mut restart_receiver: tokio::sync::broadcast::Receiver<()>) {
     tokio::spawn(async move {
         async fn loop_write(mut writer: WriteHalf<TlsStream<TcpStream>>, mut receiver_from_gui: broadcast::Receiver<InterTaskMessageToNetworkTask>, sender_to_gui: Arc<Sender<InterTaskMessageToGUI>>) -> Result<(), String> {
             let res = loop {
@@ -161,44 +165,72 @@ pub fn handle_writer(mut writer: WriteHalf<TlsStream<TcpStream>>, mut receiver_f
                                 println!("Sending message of length {}", len);
 
                                 // Send length via socket
-                                if let Err(e) = writer.write_u64(len).await {
-                                    eprintln!("Couldn't send message length: {}", e);
-                                    break Err(format!("Couldn't send message length: {}", e));
+                                match timeout(Duration::from_secs(5), writer.write_u64(len)).await {
+                                    Ok(Err(e)) => {
+                                        eprintln!("Couldn't send message length: {}", e);
+                                        break Err(format!("Couldn't send message length: {}", e));
+                                    },
+                                    Err(_) => {
+                                        eprintln!("Couldn't send message length: Timeout");
+                                        break Err("Couldn't send message length: Timeout".to_string());
+                                    },
+                                    _ => {}
                                 }
 
-                                if let Err(e) = writer.write_all(&encoded_msg[..]).await {
-                                    eprintln!("Couldn't send message: {}", e);
-                                    break Err(format!("Couldn't send message: {}", e));
+                                match timeout(Duration::from_secs(5), writer.write_all(&encoded_msg[..])).await {
+                                    Ok(Err(e)) => {
+                                        eprintln!("Couldn't send message: {}", e);
+                                        break Err(format!("Couldn't send message: {}", e));
+                                    },
+                                    Err(_) => {
+                                        eprintln!("Couldn't send message: Timeout");
+                                        break Err("Couldn't send message: Timeout".to_string());
+                                    },
+                                    _ => {}
                                 }
 
-                                if let Err(e) = writer.flush().await {
-                                    eprintln!("Couldn't flush message: {}", e);
-                                    break Err(format!("Couldn't flush message: {}", e));
+                                match timeout(Duration::from_secs(5), writer.flush()).await {
+                                    Ok(Err(e)) => {
+                                        eprintln!("Couldn't flush message: {}", e);
+                                        break Err(format!("Couldn't flush message: {}", e));
+                                    },
+                                    Err(_) => {
+                                        eprintln!("Couldn't flush message: Timeout");
+                                        break Err("Couldn't flush message: Timeout".to_string());
+                                    },
+                                    _ => {}
                                 }
                             }
                             InterTaskMessageToNetworkTask::ContactLLM { msg, history, client, settings } => {
-                                let resp = talk_to_llm(msg, history, client, settings).await;
+                                let resp = tokio::time::timeout(Duration::from_secs(30), talk_to_llm(msg, history, client, settings)).await;
 
-                                let sender = sender_to_gui.clone();
-                                tokio::spawn(async move {
-                                    if let Some(msg) = &resp.new_message_from_llm {
-                                        // calculate random delay before sending responsedelay
+                                match resp {
+                                    Ok(resp) => {
+                                        let sender = sender_to_gui.clone();
+                                        tokio::spawn(async move {
+                                            if let Some(msg) = &resp.new_message_from_llm {
+                                                // calculate random delay before sending responsedelay
 
-                                        let num_of_chars = msg.chars().count();
+                                                let num_of_chars = msg.chars().count();
 
-                                        let chars_per_second: f32;
-                                        {
-                                            let mut rng = rand::thread_rng();
-                                            chars_per_second = rng.gen_range(2.0..3.5);
-                                        }
+                                                let chars_per_second: f32;
+                                                {
+                                                    let mut rng = rand::thread_rng();
+                                                    chars_per_second = rng.gen_range(2.0..3.5);
+                                                }
 
-                                        let delay = num_of_chars as f32 / chars_per_second;
-                                        let delay_in_ms = (delay * 100.0) as u64;
-                                        println!("Delaying response by {} ms aka {} chars per second", delay_in_ms, chars_per_second);
-                                        tokio::time::sleep(tokio::time::Duration::from_millis(delay_in_ms)).await;
+                                                let delay = num_of_chars as f32 / chars_per_second;
+                                                let delay_in_ms = (delay * 100.0) as u64;
+                                                println!("Delaying response by {} ms aka {} chars per second", delay_in_ms, chars_per_second);
+                                                tokio::time::sleep(tokio::time::Duration::from_millis(delay_in_ms)).await;
+                                            }
+                                            sender.send(InterTaskMessageToGUI::HandleLLMResponse { response: resp }).expect("Channel to GUI was closed :(");
+                                        });
+                                    },
+                                    Err(_) => {
+                                        eprintln!("Couldn't contact LLM, timeout exceeded");
                                     }
-                                    sender.send(InterTaskMessageToGUI::HandleLLMResponse { response: resp }).expect("Channel to GUI was closed :(");
-                                });
+                                }
                             }
                             _ => {
                                 eprintln!("Received unexpected message from GUI: {:?}", msg_from_gui);
@@ -229,17 +261,21 @@ pub fn handle_writer(mut writer: WriteHalf<TlsStream<TcpStream>>, mut receiver_f
     });
 }
 
-pub fn handle_reader(mut reader: ReadHalf<TlsStream<TcpStream>>, sender_to_gui: Arc<Sender<InterTaskMessageToGUI>>, mut restart_receiver: tokio::sync::broadcast::Receiver<()>) {
+pub fn handle_reader(reader: ReadHalf<TlsStream<TcpStream>>, sender_to_gui: Arc<Sender<InterTaskMessageToGUI>>, mut restart_receiver: tokio::sync::broadcast::Receiver<()>) {
     tokio::spawn(async move {
         println!("Starting to read from socket");
 
         async fn loop_reading(mut reader: ReadHalf<TlsStream<TcpStream>>, sender_to_gui: Arc<Sender<InterTaskMessageToGUI>>) -> Result<(), String> {
             let res = loop {
-                let len = match reader.read_u64().await {
-                    Ok(len) => len as usize,
-                    Err(e) => {
+                let len = match timeout(Duration::from_secs(300), reader.read_u64()).await {
+                    Ok(Ok(len)) => len as usize,
+                    Ok(Err(e)) => {
                         eprintln!("Couldn't read message length: {}", e);
                         break Err(format!("Couldn't read message length: {}", e));
+                    },
+                    Err(_) => {
+                        eprintln!("Couldn't read message length: Timeout");
+                        break Err("Couldn't read message length: Timeout".to_string());
                     }
                 };
 
@@ -247,9 +283,16 @@ pub fn handle_reader(mut reader: ReadHalf<TlsStream<TcpStream>>, sender_to_gui: 
 
                 let mut buffer = vec![0; len];
 
-                if let Err(e) = reader.read_exact(&mut buffer).await {
-                    eprintln!("Couldn't read message: {}", e);
-                    break Err(format!("Couldn't read message: {}", e));
+                match timeout(Duration::from_secs(300), reader.read_exact(&mut buffer)).await {
+                    Ok(Err(e)) => {
+                        eprintln!("Couldn't read message: {}", e);
+                        break Err(format!("Couldn't read message: {}", e));
+                    },
+                    Err(_) => {
+                        eprintln!("Couldn't read message: Timeout");
+                        break Err("Couldn't read message: Timeout".to_string());
+                    },
+                    _ => {}
                 };
 
                 let msg: TcpMessage = match bincode::decode_from_slice(&buffer, bincode::config::standard()) {
