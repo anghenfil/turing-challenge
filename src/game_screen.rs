@@ -2,6 +2,7 @@ use std::time::SystemTime;
 use eframe::egui::{Align, Color32, Context, Key, KeyboardShortcut, Margin, Modifiers, RichText, ScrollArea, Separator, TextEdit};
 use eframe::{egui, Frame};
 use egui_extras::{Size, StripBuilder};
+use rand::Rng;
 use crate::{ApplicationState, ChatMessage, ChatMessageOrigin, InterTaskMessageToNetworkTask, PlayerMessage, TcpMessage};
 
 pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut Frame) {
@@ -15,6 +16,7 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
     // let the llm send the first message if the other player has not sent a message after a certain time
     if !app.llm_chat_first_message && time_elapsed >= app.llm_take_iniative_after as u64 {
         app.llm_chat_first_message = true;
+        app.llm_last_message_time = Some(SystemTime::now());
 
         app.mpsc_sender.send(InterTaskMessageToNetworkTask::ContactLLM {
             msg: PlayerMessage {
@@ -27,6 +29,25 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
             client: app.reqwest_client.clone(),
             settings: app.settings.clone(),
         }).expect("Channel to network task is closed :(");
+    }
+
+    if let Some(last_msg_time) = app.llm_last_message_time {
+        // let the llm send a message if the other player has not sent a message after a certain time
+        if last_msg_time.elapsed().unwrap().as_secs() >= app.llm_noresponse_iniative_time as u64 {
+            println!("No response from other player, sending message");
+            app.mpsc_sender.send(InterTaskMessageToNetworkTask::ContactLLM {
+                msg: PlayerMessage {
+                    msg: "Dein Gesprächspartner hat jetzt länger nicht geantwortet. Reagiere nicht auf diese Nachricht, sondern auf die Nachricht davor. Schreibe eine kurze Nachfrage wie Hallo?; Noch da?; ?.".to_string(),
+                    from_ai: false,
+                    to_ai: false,
+                    timestamp: SystemTime::now(),
+                },
+                history: app.llm_history.clone(),
+                client: app.reqwest_client.clone(),
+                settings: app.settings.clone(),
+            }).expect("Channel to network task is closed :(");
+            app.llm_last_message_time = Some(SystemTime::now());
+        }
     }
 
     egui::CentralPanel::default().show(ctx, |ui| {
@@ -106,6 +127,7 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
                                                 to_ai,
                                                 timestamp: SystemTime::now(),
                                             });
+
                                             app.mpsc_sender.send(InterTaskMessageToNetworkTask::SendMsg { msg: tcp_msg }).expect("Channel to network task is closed :(");
                                             app.chat1_input = "".to_string();
                                         }

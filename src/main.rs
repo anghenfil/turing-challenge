@@ -40,6 +40,7 @@ pub struct ApplicationState {
     pub warning: Option<String>,
     pub marked_as_ready: bool,
     pub marked_as_ready_opponent: bool,
+    pub waiting_for_ready_opponent_since: Option<SystemTime>,
     pub marked_as_prompt_ready: bool,
     pub marked_as_prompt_ready_opponent: bool,
     pub chat1_input: String,
@@ -53,6 +54,8 @@ pub struct ApplicationState {
     pub llm_history: Vec<LLMMessage>,
     pub llm_take_iniative_after: u8,
     pub llm_chat_first_message: bool,
+    pub llm_last_message_time: Option<SystemTime>,
+    pub llm_noresponse_iniative_time: u8,
     pub correctly_guessed: Option<bool>,
     pub showing_end_screen_since: Option<SystemTime>,
     pub reqwest_client: Client,
@@ -186,6 +189,7 @@ impl ApplicationState{
         let mut rng = rand::thread_rng();
         let human_chat : u8= rng.gen_range(0..=1);
         let llm_take_iniative_after = rng.gen_range(0..=15);
+        let llm_noresponse_iniative_time = rng.gen_range(10..=20);
 
         ApplicationState {
             start_game_pressed: false,
@@ -195,6 +199,7 @@ impl ApplicationState{
             warning: None,
             marked_as_ready: false,
             marked_as_ready_opponent: false,
+            waiting_for_ready_opponent_since: None,
             marked_as_prompt_ready: false,
             marked_as_prompt_ready_opponent: false,
             chat1_input: "".to_string(),
@@ -207,6 +212,8 @@ impl ApplicationState{
             llm_history: vec![],
             llm_take_iniative_after,
             llm_chat_first_message: false,
+            llm_last_message_time: None,
+            llm_noresponse_iniative_time,
             correctly_guessed: None,
             showing_end_screen_since: None,
             reqwest_client: Client::new(),
@@ -251,6 +258,7 @@ impl eframe::App for ApplicationState{
                                 },
                                 TcpMessage::Message(player_message) => {
                                     if player_message.to_ai{
+                                        self.llm_last_message_time = Some(SystemTime::now());
                                         self.llm_chat_first_message = true;
                                         self.mpsc_sender.send(InterTaskMessageToNetworkTask::ContactLLM {
                                             msg: player_message,
@@ -318,6 +326,21 @@ impl eframe::App for ApplicationState{
         }
 
         if let Screen::Welcome = self.screen{
+            if self.marked_as_ready && !self.marked_as_ready_opponent{
+                match self.waiting_for_ready_opponent_since{
+                    Some(time) => {
+                        if time.elapsed().unwrap().as_secs() >= 30{
+                            reset_app_state(self);
+                            self.mpsc_restart_sender.send(()).unwrap();
+                            self.screen = Screen::Start;
+                        }
+                    },
+                    None => {
+                        self.waiting_for_ready_opponent_since = Some(SystemTime::now());
+                    }
+                }
+            }
+
             if self.marked_as_ready && self.marked_as_ready_opponent{
                 self.screen = Screen::Prompting;
                 self.prompting_start_time = Some(SystemTime::now())
@@ -345,6 +368,12 @@ impl eframe::App for ApplicationState{
 
                 self.screen = Screen::Game;
                 self.game_start_time = Some(SystemTime::now());
+            }
+            if self.prompting_start_time.unwrap().elapsed().unwrap().as_secs() >= 120{
+                // Prompting time is over since 30 seconds but the opponent hasn't marked as ready -> reset
+                reset_app_state(self);
+                self.mpsc_restart_sender.send(()).unwrap();
+                self.screen = Screen::Start;
             }
         }
 
@@ -502,4 +531,6 @@ fn reset_app_state(state: &mut ApplicationState){
     state.llm_chat_first_message = false;
     state.correctly_guessed = None;
     state.showing_end_screen_since = None;
+    state.waiting_for_ready_opponent_since = None;
+    state.llm_last_message_time = None;
 }

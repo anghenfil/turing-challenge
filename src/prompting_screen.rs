@@ -48,10 +48,7 @@ pub fn render_prompting_screen(app: &mut ApplicationState, ctx: &Context, frame:
                         }else{
                             if ui.add(button).clicked(){
                                 app.marked_as_prompt_ready = true;
-                                if let Err(e) = app.mpsc_sender.send(InterTaskMessageToNetworkTask::SendMsg { msg: TcpMessage::PromptingFinished }){
-                                    eprintln!("Error sending message: {}", e);
-                                    // TODO: Handle error / reset application / reconnect
-                                }
+                                app.mpsc_sender.send(InterTaskMessageToNetworkTask::SendMsg { msg: TcpMessage::PromptingFinished }).expect("Failed to send message to network task");
                             }
                         }
                     });
