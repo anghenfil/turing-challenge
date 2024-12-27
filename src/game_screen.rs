@@ -137,7 +137,7 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
                                             if !to_ai{
                                                 if let Some(t) = app.last_message_time_own{
                                                     let time_elapsed = t.elapsed().unwrap().as_millis();
-                                                    app.human_response_times_chars_per_second.push((msg_text.len() as f32 / time_elapsed as f32));
+                                                    app.human_response_times_chars_per_second.push(msg_text.len() as f32 / time_elapsed as f32);
                                                     println!("added own response time: {}", msg_text.len() as f32 / time_elapsed as f32);
                                                     app.last_message_time_own = Some(SystemTime::now());
                                                 }else{
@@ -213,7 +213,7 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
                                             if !to_ai{
                                                 if let Some(t) = app.last_message_time_own{
                                                     let time_elapsed = t.elapsed().unwrap().as_millis();
-                                                    app.human_response_times_chars_per_second.push((msg_text.len() as f32 / time_elapsed as f32));
+                                                    app.human_response_times_chars_per_second.push(msg_text.len() as f32 / time_elapsed as f32);
                                                     println!("added own response time: {}", msg_text.len() as f32 / time_elapsed as f32);
                                                     app.last_message_time_own = Some(SystemTime::now());
                                                 }else{
