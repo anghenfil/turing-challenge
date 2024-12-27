@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use bincode::{Decode, Encode};
 use eframe::egui::{Context, FontData, FontDefinitions, FontFamily, FontId, TextStyle};
 use eframe::{egui, Frame};
@@ -192,7 +192,8 @@ impl ApplicationState{
         style.visuals.window_fill = egui::Color32::from_hex("#0F000A").unwrap();
         style.visuals.panel_fill = egui::Color32::from_hex("#0F000A").unwrap();
         style.visuals.extreme_bg_color = egui::Color32::from_hex("#29114C").unwrap();
-        style.text_styles.insert(TextStyle::Heading, FontId::new(20.0, FontFamily::Name("Heading".into())));
+        style.text_styles.insert(TextStyle::Heading, FontId::new(30.0, FontFamily::Name("Heading".into())));
+        style.text_styles.insert(TextStyle::Body, FontId::new(20.0, FontFamily::Proportional));
         cc.egui_ctx.set_style(style);
 
         // Generate randomly which foreign chat belongs to the real human
@@ -244,6 +245,7 @@ impl ApplicationState{
 
 impl eframe::App for ApplicationState{
     fn update(&mut self, ctx: &Context, frame: &mut Frame) {
+        ctx.request_repaint_after(Duration::from_secs(1));
         if !self.mpsc_receiver.is_empty(){
             match self.mpsc_receiver.try_recv(){
                 Ok(msg) => {

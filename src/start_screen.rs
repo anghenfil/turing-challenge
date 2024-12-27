@@ -1,3 +1,4 @@
+use crate::egui::RichText;
 use eframe::egui::Context;
 use eframe::{egui, Frame};
 use egui_extras::{Size, StripBuilder};
@@ -38,6 +39,9 @@ pub fn render_start_screen(app: &mut ApplicationState, ctx: &Context, frame: &mu
                        if app.start_game_pressed{
                            ui.spinner();
                        }
+
+                       ui.add_space(50.0);
+                       ui.label(RichText::new("Any Issues?\n Call 28000 for Support!"));
                    });
                });
                strip.cell(|ui|{
