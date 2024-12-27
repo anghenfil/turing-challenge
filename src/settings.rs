@@ -21,6 +21,10 @@ pub struct Settings {
     pub openai_api_key: String,
     /// Initial prompt for the LLM
     pub initial_prompt: String,
+    /// Lower bound for llm_take_iniative_after
+    pub llm_take_initiative_after_lower_bound: usize,
+    /// Upper bound for llm_take_iniative_after
+    pub llm_take_initiative_after_upper_bound: usize,
 }
 
 impl Settings{

@@ -107,7 +107,7 @@ pub fn spawn_network_task(mpsc_sender: tokio::sync::broadcast::Sender<InterTaskM
                                         }
                                     },
                                     _ => {
-                                        panic!("Unexpected message from GUI: {:?}", msg);
+                                        eprintln!("Unexpected message from GUI: {:?}", msg);
                                     }}
                                 }
                                 Err(e) => {

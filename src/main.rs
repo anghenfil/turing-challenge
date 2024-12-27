@@ -194,13 +194,14 @@ impl ApplicationState{
         style.visuals.extreme_bg_color = egui::Color32::from_hex("#29114C").unwrap();
         style.text_styles.insert(TextStyle::Heading, FontId::new(30.0, FontFamily::Name("Heading".into())));
         style.text_styles.insert(TextStyle::Body, FontId::new(20.0, FontFamily::Proportional));
+        style.text_styles.insert(TextStyle::Button, FontId::new(20.0, FontFamily::Proportional));
         cc.egui_ctx.set_style(style);
 
         // Generate randomly which foreign chat belongs to the real human
         let mut rng = rand::thread_rng();
         let human_chat : u8= rng.gen_range(0..=1);
-        let llm_take_iniative_after = rng.gen_range(0..=15);
         let llm_noresponse_iniative_time = rng.gen_range(15..=30);
+        let llm_take_iniative_after = rng.gen_range(settings.llm_take_initiative_after_lower_bound..=settings.llm_take_initiative_after_upper_bound);
 
         let (chars_per_second_lower, chars_per_second_upper) = calculate_average_chars_per_second_limits(&previous_human_response_times);
 
@@ -223,7 +224,7 @@ impl ApplicationState{
             prompting_start_time: None,
             game_start_time: None,
             llm_history: vec![],
-            llm_take_iniative_after,
+            llm_take_iniative_after: llm_take_iniative_after.try_into().unwrap(),
             llm_chat_first_message: false,
             llm_last_message_time: None,
             llm_noresponse_iniative_time,
@@ -609,7 +610,7 @@ fn calculate_average_chars_per_second_limits(response_times: &Vec<f32>) -> (f32,
 fn reset_app_state(state: &mut ApplicationState){
     let mut rng = rand::thread_rng();
     let human_chat : u8= rng.gen_range(0..=1);
-    let llm_take_iniative_after = rng.gen_range(12..=25);
+    let llm_take_iniative_after = rng.gen_range(state.settings.llm_take_initiative_after_lower_bound..=state.settings.llm_take_initiative_after_upper_bound);
     let (lower_limit, upper_limit) = calculate_average_chars_per_second_limits(&state.human_response_times_chars_per_second);
 
     state.start_game_pressed = false;
@@ -629,7 +630,7 @@ fn reset_app_state(state: &mut ApplicationState){
     state.prompting_start_time = None;
     state.game_start_time = None;
     state.llm_history = vec![];
-    state.llm_take_iniative_after = llm_take_iniative_after;
+    state.llm_take_iniative_after = llm_take_iniative_after as u8;
     state.llm_chat_first_message = false;
     state.correctly_guessed = None;
     state.showing_end_screen_since = None;
