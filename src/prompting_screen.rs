@@ -28,9 +28,9 @@ pub fn render_prompting_screen(app: &mut ApplicationState, ctx: &Context, frame:
                 });
                 strip.cell(|ui|{
                     ui.vertical_centered(|ui|{
-                        ui.add_space(10.0);
+                        ui.add_space(20.0);
                         ui.heading("Start Prompting!");
-                        ui.add_space(10.0);
+                        ui.add_space(30.0);
                         ui.label("Initial Prompt");
                         ScrollArea::vertical().max_height(400.0).show(ui, |ui|{
                             let mut text_edit = TextEdit::multiline(&mut app.custom_prompt);

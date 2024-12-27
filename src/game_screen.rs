@@ -68,9 +68,9 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
                 strip.cell(|ui| {});
                 strip.cell(|ui| {
                     ui.vertical_centered(|ui| {
-                        ui.add_space(10.0);
+                        ui.add_space(20.0);
                         ui.heading("The Turing Challenge");
-                        ui.add_space(10.0);
+                        ui.add_space(20.0);
                         StripBuilder::new(ui)
                             .size(Size::exact((content_width / 2.0) - 15.0))
                             .size(Size::exact(10.0))
@@ -239,7 +239,7 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
                                     label = label.strong();
                                 }
                             }
-                            ui.add_sized([30.0, 25.0], egui::Label::new(label));
+                            ui.add_sized([70.0, 35.0], egui::Label::new(label));
                         });
                     });
                 });

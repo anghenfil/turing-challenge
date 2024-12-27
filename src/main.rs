@@ -200,7 +200,7 @@ impl ApplicationState{
         let mut rng = rand::thread_rng();
         let human_chat : u8= rng.gen_range(0..=1);
         let llm_take_iniative_after = rng.gen_range(0..=15);
-        let llm_noresponse_iniative_time = rng.gen_range(10..=20);
+        let llm_noresponse_iniative_time = rng.gen_range(15..=30);
 
         let (chars_per_second_lower, chars_per_second_upper) = calculate_average_chars_per_second_limits(&previous_human_response_times);
 
