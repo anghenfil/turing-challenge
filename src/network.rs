@@ -201,7 +201,7 @@ pub fn handle_writer(writer: WriteHalf<TlsStream<TcpStream>>, receiver_from_gui:
                                     _ => {}
                                 }
                             }
-                            InterTaskMessageToNetworkTask::ContactLLM { msg, history, client, settings } => {
+                            InterTaskMessageToNetworkTask::ContactLLM { msg, history, client, settings, lower_delay_limit, upper_delay_limit } => {
                                 let resp = tokio::time::timeout(Duration::from_secs(30), talk_to_llm(msg, history, client, settings)).await;
 
                                 match resp {
@@ -216,7 +216,7 @@ pub fn handle_writer(writer: WriteHalf<TlsStream<TcpStream>>, receiver_from_gui:
                                                 let chars_per_second: f32;
                                                 {
                                                     let mut rng = rand::thread_rng();
-                                                    chars_per_second = rng.gen_range(2.0..3.5);
+                                                    chars_per_second = rng.gen_range(lower_delay_limit..upper_delay_limit);
                                                 }
 
                                                 let delay = num_of_chars as f32 / chars_per_second;

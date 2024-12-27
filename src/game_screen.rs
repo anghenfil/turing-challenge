@@ -28,6 +28,8 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
             history: app.llm_history.clone(),
             client: app.reqwest_client.clone(),
             settings: app.settings.clone(),
+            lower_delay_limit: app.chars_per_second_lower,
+            upper_delay_limit: app.chars_per_second_upper,
         }).expect("Channel to network task is closed :(");
     }
 
@@ -45,6 +47,8 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
                 history: app.llm_history.clone(),
                 client: app.reqwest_client.clone(),
                 settings: app.settings.clone(),
+                lower_delay_limit: app.chars_per_second_lower,
+                upper_delay_limit: app.chars_per_second_upper,
             }).expect("Channel to network task is closed :(");
             app.llm_last_message_time = Some(SystemTime::now());
         }
@@ -122,13 +126,25 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
 
                                             // Send message to network task
                                             let tcp_msg = TcpMessage::Message(PlayerMessage {
-                                                msg: msg_text,
+                                                msg: msg_text.clone(),
                                                 from_ai: false,
                                                 to_ai,
                                                 timestamp: SystemTime::now(),
                                             });
 
                                             app.mpsc_sender.send(InterTaskMessageToNetworkTask::SendMsg { msg: tcp_msg }).expect("Channel to network task is closed :(");
+
+                                            if !to_ai{
+                                                if let Some(t) = app.last_message_time_own{
+                                                    let time_elapsed = t.elapsed().unwrap().as_millis();
+                                                    app.human_response_times_chars_per_second.push((msg_text.len() as f32 / time_elapsed as f32));
+                                                    println!("added own response time: {}", msg_text.len() as f32 / time_elapsed as f32);
+                                                    app.last_message_time_own = Some(SystemTime::now());
+                                                }else{
+                                                    app.last_message_time_own = Some(SystemTime::now());
+                                                }
+                                            }
+
                                             app.chat1_input = "".to_string();
                                         }
                                     });
@@ -187,12 +203,23 @@ pub fn render_game_screen(app: &mut ApplicationState, ctx: &Context, frame: &mut
 
                                             // Send message to network task
                                             let tcp_msg = TcpMessage::Message(PlayerMessage {
-                                                msg: msg_text,
+                                                msg: msg_text.clone(),
                                                 timestamp: SystemTime::now(),
                                                 from_ai: false,
                                                 to_ai,
                                             });
                                             app.mpsc_sender.send(InterTaskMessageToNetworkTask::SendMsg { msg: tcp_msg }).expect("Channel to network task is closed :(");
+
+                                            if !to_ai{
+                                                if let Some(t) = app.last_message_time_own{
+                                                    let time_elapsed = t.elapsed().unwrap().as_millis();
+                                                    app.human_response_times_chars_per_second.push((msg_text.len() as f32 / time_elapsed as f32));
+                                                    println!("added own response time: {}", msg_text.len() as f32 / time_elapsed as f32);
+                                                    app.last_message_time_own = Some(SystemTime::now());
+                                                }else{
+                                                    app.last_message_time_own = Some(SystemTime::now());
+                                                }
+                                            }
 
                                             app.chat2_input = "".to_string();
                                         }

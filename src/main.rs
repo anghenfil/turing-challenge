@@ -1,4 +1,6 @@
 use std::fmt::Display;
+use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::sync::Arc;
 use std::time::SystemTime;
 use bincode::{Decode, Encode};
@@ -63,6 +65,12 @@ pub struct ApplicationState {
     pub mpsc_sender: tokio::sync::broadcast::Sender<InterTaskMessageToNetworkTask>,
     pub mpsc_receiver: tokio::sync::broadcast::Receiver<InterTaskMessageToGUI>,
     pub mpsc_restart_sender: tokio::sync::broadcast::Sender<()>,
+    pub last_message_time_own: Option<SystemTime>,
+    pub last_message_time_foreign: Option<SystemTime>,
+    pub chars_per_second_lower: f32,
+    pub chars_per_second_upper: f32,
+    /// Previous human response times in chars per second
+    pub human_response_times_chars_per_second: Vec<f32>,
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +175,8 @@ impl ApplicationState{
     pub fn new(cc: &eframe::CreationContext<'_>, mpsc_sender: broadcast::Sender<InterTaskMessageToNetworkTask>, mpsc_receiver: broadcast::Receiver<InterTaskMessageToGUI>, mpsc_restart_sender: broadcast::Sender<()>) -> Self {
         let settings = settings::Settings::new().expect("Failed to load settings");
 
+        let previous_human_response_times = load_previous_human_response_times();
+
         let mut fonts = FontDefinitions::default();
         fonts.font_data.insert("pilowlava".to_string(), Arc::new(FontData::from_static(include_bytes!("../fonts/Pilowlava-Regular.otf"))));
         fonts.font_data.insert("spacegrotesk".to_string(), Arc::new(FontData::from_static(include_bytes!("../fonts/SpaceGrotesk-Regular.otf"))));
@@ -190,6 +200,8 @@ impl ApplicationState{
         let human_chat : u8= rng.gen_range(0..=1);
         let llm_take_iniative_after = rng.gen_range(0..=15);
         let llm_noresponse_iniative_time = rng.gen_range(10..=20);
+
+        let (chars_per_second_lower, chars_per_second_upper) = calculate_average_chars_per_second_limits(&previous_human_response_times);
 
         ApplicationState {
             start_game_pressed: false,
@@ -221,6 +233,11 @@ impl ApplicationState{
             mpsc_sender,
             mpsc_receiver,
             mpsc_restart_sender,
+            human_response_times_chars_per_second: vec![],
+            chars_per_second_upper,
+            chars_per_second_lower,
+            last_message_time_own: None,
+            last_message_time_foreign: None,
         }
     }
 }
@@ -241,7 +258,21 @@ impl eframe::App for ApplicationState{
                         },
                         InterTaskMessageToGUI::ConnectionClosedUnexpectedly {error} => {
                             println!("Connection closed unexpectedly: {}", error);
-                           // Reset the state
+                            // Save the human response times
+                            save_human_response_times_to_file(&self.human_response_times_chars_per_second);
+                            // Calculate the new average chars per second
+                            let (lower, upper) = calculate_average_chars_per_second_limits(&self.human_response_times_chars_per_second);
+                            self.chars_per_second_lower = lower;
+                            self.chars_per_second_upper = upper;
+
+                            // Restart
+                            // Save the human response times
+                            save_human_response_times_to_file(&self.human_response_times_chars_per_second);
+                            // Calculate the new average chars per second
+                            let (lower, upper) = calculate_average_chars_per_second_limits(&self.human_response_times_chars_per_second);
+                            self.chars_per_second_lower = lower;
+                            self.chars_per_second_upper = upper;
+
                             reset_app_state(self);
                             self.mpsc_restart_sender.send(()).unwrap();
                         },
@@ -264,7 +295,9 @@ impl eframe::App for ApplicationState{
                                             msg: player_message,
                                             history: self.llm_history.clone(),
                                             client: self.reqwest_client.clone(),
-                                            settings: self.settings.clone()
+                                            settings: self.settings.clone(),
+                                            lower_delay_limit: self.chars_per_second_lower,
+                                            upper_delay_limit: self.chars_per_second_upper,
                                         }).unwrap();
                                     }else{
                                         if player_message.from_ai{
@@ -282,6 +315,22 @@ impl eframe::App for ApplicationState{
                                                 });
                                             }
                                         }else{
+                                            // Message not from AI, calculate response time
+                                            match self.last_message_time_foreign{
+                                                Some(time) => {
+                                                    let elapsed = time.elapsed().unwrap();
+                                                    let elapsed_secs = elapsed.as_millis();
+
+                                                    let chars_per_second = player_message.msg.len() as f32 / elapsed_secs as f32;
+                                                    println!("Added foreign chars per second: {}", chars_per_second);
+                                                    self.human_response_times_chars_per_second.push(chars_per_second);
+
+                                                    self.last_message_time_foreign = Some(SystemTime::now());
+                                                },
+                                                None => {
+                                                    self.last_message_time_foreign = Some(SystemTime::now());
+                                                }
+                                            }
                                             if self.human_chat == 0{
                                                 self.chat1_history.push(ChatMessage{
                                                     timestamp: player_message.timestamp,
@@ -330,6 +379,13 @@ impl eframe::App for ApplicationState{
                 match self.waiting_for_ready_opponent_since{
                     Some(time) => {
                         if time.elapsed().unwrap().as_secs() >= 30{
+                            // Save the human response times
+                            save_human_response_times_to_file(&self.human_response_times_chars_per_second);
+                            // Calculate the new average chars per second
+                            let (lower, upper) = calculate_average_chars_per_second_limits(&self.human_response_times_chars_per_second);
+                            self.chars_per_second_lower = lower;
+                            self.chars_per_second_upper = upper;
+
                             reset_app_state(self);
                             self.mpsc_restart_sender.send(()).unwrap();
                             self.screen = Screen::Start;
@@ -371,6 +427,14 @@ impl eframe::App for ApplicationState{
             }
             if self.prompting_start_time.unwrap().elapsed().unwrap().as_secs() >= 120{
                 // Prompting time is over since 30 seconds but the opponent hasn't marked as ready -> reset
+                // Save the human response times
+                save_human_response_times_to_file(&self.human_response_times_chars_per_second);
+                // Calculate the new average chars per second
+                let (lower, upper) = calculate_average_chars_per_second_limits(&self.human_response_times_chars_per_second);
+                self.chars_per_second_lower = lower;
+                self.chars_per_second_upper = upper;
+
+
                 reset_app_state(self);
                 self.mpsc_restart_sender.send(()).unwrap();
                 self.screen = Screen::Start;
@@ -385,6 +449,13 @@ impl eframe::App for ApplicationState{
 
         if let Screen::End2 = self.screen{
             if self.showing_end_screen_since.unwrap().elapsed().unwrap().as_secs() >= 10{
+                // Save the human response times
+                save_human_response_times_to_file(&self.human_response_times_chars_per_second);
+                // Calculate the new average chars per second
+                let (lower, upper) = calculate_average_chars_per_second_limits(&self.human_response_times_chars_per_second);
+                self.chars_per_second_lower = lower;
+                self.chars_per_second_upper = upper;
+
                 // Restart the app
                 reset_app_state(self);
                 self.mpsc_restart_sender.send(()).unwrap();
@@ -454,6 +525,8 @@ pub enum InterTaskMessageToNetworkTask {
         history: Vec<LLMMessage>,
         client: Client,
         settings: Arc<Settings>,
+        lower_delay_limit: f32,
+        upper_delay_limit: f32,
     },
 }
 
@@ -505,10 +578,37 @@ pub async fn main()  {
     ).expect("Couldn't start GUI");
 }
 
+/// Calculate the average chars per second from a list of response times
+/// Returns the lower and upper limits for random generation
+fn calculate_average_chars_per_second_limits(response_times: &Vec<f32>) -> (f32, f32){
+    let sum: f32 = response_times.iter().sum();
+    let len = response_times.len();
+    if len == 0{
+        return (2.0, 3.5); // Default values if we dont have any values yet
+    }
+    let avg = sum as f32 / len as f32;
+
+    // Calculate the standard deviation
+    let variance = response_times.iter().map(|v| {
+        let diff = *v - avg;
+        diff * diff
+    }).sum::<f32>() / len as f32;
+
+    let std_dev = variance.sqrt();
+
+    // Convert vom ms to seconds:
+    let avg = avg * 1000.0;
+    let std_dev = std_dev * 1000.0;
+
+    println!("Average: {}, Std Dev: {}", avg, std_dev);
+    (avg - std_dev, avg + std_dev)
+}
+
 fn reset_app_state(state: &mut ApplicationState){
     let mut rng = rand::thread_rng();
     let human_chat : u8= rng.gen_range(0..=1);
-    let llm_take_iniative_after = rng.gen_range(0..=15);
+    let llm_take_iniative_after = rng.gen_range(12..=25);
+    let (lower_limit, upper_limit) = calculate_average_chars_per_second_limits(&state.human_response_times_chars_per_second);
 
     state.start_game_pressed = false;
     state.screen = Screen::Start;
@@ -533,4 +633,64 @@ fn reset_app_state(state: &mut ApplicationState){
     state.showing_end_screen_since = None;
     state.waiting_for_ready_opponent_since = None;
     state.llm_last_message_time = None;
+    state.chars_per_second_upper = upper_limit;
+    state.chars_per_second_lower = lower_limit;
+}
+
+fn load_previous_human_response_times() -> Vec<f32>{
+    let file = match File::open("response_times.txt") {
+        Ok(f) => f,
+        Err(e) => {
+            println!("Failed to open file: {}. Trying to create it.", e);
+            if let Err(e) = File::create("response_times.txt") {
+                println!("Failed to create file: {}", e);
+            }
+            return vec![];
+        }
+    };
+
+    let mut values: Vec<f32> = vec![];
+
+    let reader = BufReader::new(file);
+    for line in reader.lines(){
+        match line{
+            Ok(l) => {
+                match l.parse::<f32>(){
+                    Ok(v) => {
+                        values.push(v);
+                    },
+                    Err(e) => {
+                        println!("Failed to parse line: {}", e);
+                    }
+                }
+            },
+            Err(e) => {
+                println!("Failed to read line: {}", e);
+            }
+        }
+    }
+
+    values
+}
+
+fn save_human_response_times_to_file(values: &Vec<f32>){
+    println!("Saving response times to file");
+    let file = match File::create("response_times.txt") {
+        Ok(f) => f,
+        Err(e) => {
+            println!("Failed to create file: {}", e);
+            return;
+        }
+    };
+
+    let mut writer = BufWriter::new(file);
+
+    for v in values{
+        match writeln!(writer, "{}", v){
+            Ok(_) => {},
+            Err(e) => {
+                println!("Failed to write line: {}", e);
+            }
+        }
+    }
 }
